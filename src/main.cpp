@@ -2,9 +2,11 @@
 #include "cli-path.hpp"
 #include "editor.hpp"
 #include "instance-lock.hpp"
+#include "overlay-window.hpp"
 #include "pin.hpp"
-
-#include <LayerShellQt/Window>
+#ifdef __APPLE__
+#include "serve.hpp"
+#endif
 
 #include <QImageReader>
 #include <QApplication>
@@ -14,6 +16,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QLockFile>
+#include <QMessageBox>
 #include <QScreen>
 #include <QSocketNotifier>
 #include <QUrl>
@@ -21,16 +24,35 @@
 
 #include <csignal>
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
+#ifdef __APPLE__
+/** A background (LSUIElement) process has no console output, so capture
+ *  failures must surface as a visible dialog instead of a silent exit. */
+void showVisibleError(const QString &message) {
+  QMessageBox box(QMessageBox::Critical, QStringLiteral("omasnap"), message,
+                  QMessageBox::Ok);
+  box.exec();
+}
+#else
+void showVisibleError(const QString &message) {
+  static_cast<void>(message);
+}
+#endif
+
 class PosixSignalNotifier final : public QObject {
 public:
   explicit PosixSignalNotifier(QObject *parent = nullptr) : QObject(parent) {
-    if (::socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0,
-                     fds_) != 0)
+    if (::socketpair(AF_UNIX, SOCK_DGRAM, 0, fds_) != 0)
       return; // Default signal disposition stays in effect.
+    for (const int fd : fds_) {
+      static_cast<void>(::fcntl(fd, F_SETFD, FD_CLOEXEC));
+      const int flags = ::fcntl(fd, F_GETFL);
+      static_cast<void>(::fcntl(fd, F_SETFL, flags | O_NONBLOCK));
+    }
     signalFd_ = fds_[0];
 
     struct sigaction sa{};
@@ -94,8 +116,7 @@ int main(int argc, char **argv) {
   QCoreApplication::setApplicationName(QStringLiteral("omasnap"));
   QCoreApplication::setApplicationVersion(QString::fromLatin1(OMASNAP_VERSION));
   QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
-  qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
-  QGuiApplication::setDesktopFileName(QStringLiteral("omasnap"));
+  overlayPlatformPreinit();
   QApplication application(argc, argv);
 
   // A stitched scroll capture (or any tall pinned image) exceeds Qt's default
@@ -105,8 +126,8 @@ int main(int argc, char **argv) {
 
   QCommandLineParser parser;
   parser.setApplicationDescription(QStringLiteral(
-      "Native Wayland screenshot and annotation overlay for Hyprland and "
-      "Omarchy.\n"
+      "Native screenshot and annotation overlay for Hyprland/Omarchy "
+      "(Wayland)\nand macOS.\n"
       "\n"
       "Only one capture overlay runs at a time. Starting omasnap again while "
       "an\noverlay is open dismisses it: the running instance is asked to "
@@ -156,6 +177,11 @@ int main(int argc, char **argv) {
       QStringLiteral("Show an image as a pinned always-visible layer."),
       QStringLiteral("path"));
   parser.addOption(pinOption);
+  const QCommandLineOption serveOption(
+      QStringLiteral("serve"),
+      QStringLiteral("Run as a background hotkey server that launches "
+                     "captures (macOS)."));
+  parser.addOption(serveOption);
   parser.addPositionalArgument(
       QStringLiteral("target"),
       QStringLiteral("Capture mode (smart, region, windows, fullscreen) or the "
@@ -183,6 +209,21 @@ int main(int argc, char **argv) {
     captureMode = CaptureEditor::CaptureMode::Window;
 
   const QStringList positional = parser.positionalArguments();
+  if (parser.isSet(serveOption)) {
+    if (!filePath.isEmpty() || clipboardInput || requestedModes > 0 ||
+        !positional.isEmpty() || quickOutputMode != QuickOutputMode::None ||
+        parser.isSet(pinOption)) {
+      qCritical()
+          << "Serve mode cannot be combined with capture or edit targets";
+      return 2;
+    }
+#ifdef __APPLE__
+    return runServeMode();
+#else
+    qCritical("Serve mode is only available on macOS");
+    return 2;
+#endif
+  }
   if (parser.isSet(pinOption)) {
     if (!filePath.isEmpty() || clipboardInput || requestedModes > 0 ||
         !positional.isEmpty() || quickOutputMode != QuickOutputMode::None) {
@@ -313,6 +354,7 @@ int main(int argc, char **argv) {
   } else if (!probeFocusedMonitor(capture.monitor, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
+    showVisibleError(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
   }
 
@@ -326,6 +368,7 @@ int main(int argc, char **argv) {
                             !instantFullscreenOutput, error)) {
     qCritical().noquote() << error;
     sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
+    showVisibleError(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
   }
 
@@ -369,27 +412,17 @@ int main(int argc, char **argv) {
   editor.setScreen(targetScreen);
   editor.setGeometry(targetScreen->geometry());
   editor.winId();
-  QWindow *window = editor.windowHandle();
-  LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
-  if (!window || !layerWindow) {
+  if (!configureCaptureOverlay(editor, targetScreen)) {
     qCritical() << "Could not create capture overlay layer";
+    showVisibleError(QStringLiteral("Could not create the capture overlay"));
     return 1;
   }
-  layerWindow->setScope(QStringLiteral("omasnap"));
-  layerWindow->setScreen(targetScreen);
-  layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorTop);
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layerWindow->setAnchors(anchors);
-  layerWindow->setExclusiveZone(-1);
-  layerWindow->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityExclusive);
-  layerWindow->setActivateOnShow(true);
   editor.show();
   editor.setFocus(Qt::ActiveWindowFocusReason);
+  // Cocoa reports key-window status but Qt's focus bookkeeping needs the
+  // sanctioned activation request to route keyboard events to the overlay.
+  if (QWindow *handle = editor.windowHandle())
+    handle->requestActivate();
 
   return application.exec();
 }

@@ -35,7 +35,10 @@ lint: build
 		trap 'rm -rf "$$commands_dir"' EXIT; \
 		cp "$(BUILD_DIR)/compile_commands.json" \
 			"$$commands_dir/compile_commands.json"; \
-		sed -i 's/ -mno-direct-extern-access//g' \
+		sed -e 's/ -mno-direct-extern-access//g' \
+			"$$commands_dir/compile_commands.json" \
+			> "$$commands_dir/compile_commands.json.filtered"; \
+		mv "$$commands_dir/compile_commands.json.filtered" \
 			"$$commands_dir/compile_commands.json"; \
 		for source in $(LINT_SOURCES); do \
 			"$(CLANG_TIDY)" -p "$$commands_dir" \

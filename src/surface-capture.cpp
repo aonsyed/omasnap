@@ -321,35 +321,6 @@ QImage copyCapturedImage(const CaptureState &state) {
 }
 } // namespace
 
-QImage normalizeWaylandCapture(const QImage &image, std::uint32_t transform) {
-  const auto rotated = [&image](qreal degrees) {
-    return image.transformed(QTransform().rotate(degrees));
-  };
-  const auto flipped = [](const QImage &source) {
-    return source.transformed(QTransform().scale(-1, 1));
-  };
-  switch (transform) {
-  case WL_OUTPUT_TRANSFORM_NORMAL:
-    return image;
-  case WL_OUTPUT_TRANSFORM_90:
-    return rotated(90);
-  case WL_OUTPUT_TRANSFORM_180:
-    return rotated(180);
-  case WL_OUTPUT_TRANSFORM_270:
-    return rotated(-90);
-  case WL_OUTPUT_TRANSFORM_FLIPPED:
-    return flipped(image);
-  case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-    return flipped(rotated(90));
-  case WL_OUTPUT_TRANSFORM_FLIPPED_180:
-    return flipped(rotated(180));
-  case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-    return flipped(rotated(-90));
-  default:
-    return {};
-  }
-}
-
 static bool captureCurrentSource(CaptureState &state, QImage &image, QString &error,
                           const QString &stoppedError,
                           const QString &failedError,

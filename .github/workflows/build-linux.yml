@@ -57,3 +57,45 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.CAPTURE_ARCHIVE }}
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-latest
+
+    steps:
+      - name: Install build dependencies
+        run: brew install cmake ninja qt
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build and run headless smoke suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/qt
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ./build/omasnap.app/Contents/MacOS/omasnap --version
+          ctest --test-dir build --output-on-failure
+
+      - name: Package macOS artifact
+        run: |
+          version="$(./build/omasnap.app/Contents/MacOS/omasnap --version | cut -d' ' -f2)"
+          archive="omasnap-${version}-macos-arm64.tar.gz"
+          echo "MAC_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "MAC_ARTIFACT=${archive%.tar.gz}" >> "$GITHUB_ENV"
+          ditto -c -k --sequesterRsrc --keepParent build/omasnap.app "$archive"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.MAC_ARTIFACT }}
+          path: ${{ env.MAC_ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Attach artifact to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.MAC_ARCHIVE }}

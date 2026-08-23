@@ -2,7 +2,10 @@
 #include "transform-smoke.hpp"
 
 #include "capture.hpp"
+
+#if !defined(Q_OS_MACOS)
 #include "surface-capture-smoke.hpp"
+#endif
 
 #include <QDir>
 #include <QFile>
@@ -10,9 +13,8 @@
 #include <QTemporaryDir>
 #include <QVector>
 
-#include <wayland-client-protocol.h>
-
 namespace {
+#if !defined(Q_OS_MACOS)
 /** Writes an executable helper used to replace an external command. */
 bool writeExecutable(const QString &path, const QByteArray &contents) {
   QFile file(path);
@@ -24,6 +26,7 @@ bool writeExecutable(const QString &path, const QByteArray &contents) {
                                          QFileDevice::WriteOwner |
                                          QFileDevice::ExeOwner);
 }
+#endif // !Q_OS_MACOS
 
 /** Creates a small image whose red channel stores easy-to-check values. */
 QImage indexedImage(const QVector<QVector<int>> &rows) {
@@ -34,9 +37,42 @@ QImage indexedImage(const QVector<QVector<int>> &rows) {
   }
   return image;
 }
+
+/** Checks every WL_OUTPUT_TRANSFORM_* variant against its upright form.
+ *  The constants mirror wayland-client-protocol.h so this stays runnable on
+ *  platforms without Wayland headers. */
+bool checkNormalizeMatrix(QString &error) {
+  constexpr std::uint32_t kTransformNormal = 0;
+  constexpr std::uint32_t kTransform90 = 1;
+  constexpr std::uint32_t kTransform180 = 2;
+  constexpr std::uint32_t kTransform270 = 3;
+  constexpr std::uint32_t kTransformFlipped = 4;
+  constexpr std::uint32_t kTransformFlipped90 = 5;
+  constexpr std::uint32_t kTransformFlipped180 = 6;
+  constexpr std::uint32_t kTransformFlipped270 = 7;
+  const QImage upright = indexedImage({{1, 2}, {3, 4}, {5, 6}});
+  const QVector<QPair<std::uint32_t, QImage>> transformedImages{
+      {kTransformNormal, upright},
+      {kTransform90, indexedImage({{2, 4, 6}, {1, 3, 5}})},
+      {kTransform180, indexedImage({{6, 5}, {4, 3}, {2, 1}})},
+      {kTransform270, indexedImage({{5, 3, 1}, {6, 4, 2}})},
+      {kTransformFlipped, indexedImage({{2, 1}, {4, 3}, {6, 5}})},
+      {kTransformFlipped90, indexedImage({{1, 3, 5}, {2, 4, 6}})},
+      {kTransformFlipped180, indexedImage({{5, 6}, {3, 4}, {1, 2}})},
+      {kTransformFlipped270, indexedImage({{6, 4, 2}, {5, 3, 1}})},
+  };
+  for (const auto &[transform, transformed] : transformedImages) {
+    if (normalizeWaylandCapture(transformed, transform) != upright) {
+      error = QStringLiteral("Captured Wayland buffer was not upright");
+      return false;
+    }
+  }
+  return true;
+}
 } // namespace
 
 bool runTransformSmoke(QString &error) {
+#if !defined(Q_OS_MACOS)
   if (!runWaylandCleanupChecks()) {
     error =
         QStringLiteral("Wayland capture objects were not released in order");
@@ -122,23 +158,7 @@ bool runTransformSmoke(QString &error) {
   }
 
   restoreEnvironment();
+#endif // !Q_OS_MACOS
 
-  const QImage upright = indexedImage({{1, 2}, {3, 4}, {5, 6}});
-  const QVector<QPair<std::uint32_t, QImage>> transformedImages{
-      {WL_OUTPUT_TRANSFORM_NORMAL, upright},
-      {WL_OUTPUT_TRANSFORM_90, indexedImage({{2, 4, 6}, {1, 3, 5}})},
-      {WL_OUTPUT_TRANSFORM_180, indexedImage({{6, 5}, {4, 3}, {2, 1}})},
-      {WL_OUTPUT_TRANSFORM_270, indexedImage({{5, 3, 1}, {6, 4, 2}})},
-      {WL_OUTPUT_TRANSFORM_FLIPPED, indexedImage({{2, 1}, {4, 3}, {6, 5}})},
-      {WL_OUTPUT_TRANSFORM_FLIPPED_90, indexedImage({{1, 3, 5}, {2, 4, 6}})},
-      {WL_OUTPUT_TRANSFORM_FLIPPED_180, indexedImage({{5, 6}, {3, 4}, {1, 2}})},
-      {WL_OUTPUT_TRANSFORM_FLIPPED_270, indexedImage({{6, 4, 2}, {5, 3, 1}})},
-  };
-  for (const auto &[transform, transformed] : transformedImages) {
-    if (normalizeWaylandCapture(transformed, transform) != upright) {
-      error = QStringLiteral("Captured Wayland buffer was not upright");
-      return false;
-    }
-  }
-  return true;
+  return checkNormalizeMatrix(error);
 }

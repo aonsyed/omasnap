@@ -39,16 +39,42 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 
 ## Platform scope
 
-The supported target is **Wayland + Hyprland**, with Omarchy as the primary integration.
-The renderer, layer surface, clipboard, and monitor capture use Wayland protocols;
-monitor/window discovery currently calls `hyprctl`. The focused output is captured
-in-process through `ext-image-copy-capture` before the layer maps. Selection displays
-that captured frame, while the annotation editor uses
-a translucent layer scrim over the live desktop and draws only the selected capture.
-Another Wayland compositor could support the application after supplying equivalent
-monitor and window discovery; generic Wayland support is not claimed by 1.0.
+This fork adds **macOS 14+ (Apple silicon)** as a second first-class target alongside the
+original **Wayland + Hyprland** platform. Both share the same Qt editor, annotation
+model, operation log, pins, and CLI; only thin per-platform backends differ
+(`capture-linux.cpp` / `overlay-window-wayland.cpp` vs `*-macos.mm`), selected by CMake.
 
-Runtime commands used by the application:
+On Wayland, monitor/window discovery calls `hyprctl`, capture uses `ext-image-copy-capture`
+in-process before the layer maps, and overlays are layer-shell surfaces.
+
+On macOS, capture uses ScreenCaptureKit (`SCScreenshotManager`, macOS 14+), window
+discovery uses `CGWindowListCopyWindowInfo`, and overlays/pins are borderless
+always-on-top NSPanels that join all Spaces. OCR uses the Vision framework with no extra
+dependencies. Screen Recording permission is requested on first capture: grant it in
+System Settings > Privacy & Security > Screen Recording, then run omasnap again.
+A stable code-signing identity avoids re-prompts after rebuilds:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
+  -DOMASNAP_SIGN_IDENTITY="omasnap-dev"   # self-signed cert created once in Keychain Access
+cmake --build build --parallel
+open build/omasnap.app
+```
+
+macOS runtime behavior:
+
+- `omasnap.app` is a menu-bar-less (`LSUIElement`) accessory app; the editor overlay and
+  pinned captures float above normal windows on all Spaces.
+- `omasnap --serve` registers global hotkeys (no extra permissions): ⌘⇧R region,
+  ⌘⇧W window, ⌘⇧F fullscreen. Each spawns the regular one-shot CLI, so the
+  toggle/dismiss instance behavior is identical to Hyprland bindings. Remap any
+  combo via `OMASNAP_HOTKEY_REGION`/`_WINDOW`/`_FULLSCREEN` (e.g.
+  `cmd+shift+9`; keys: a-z, 0-9, f1-f19, space, tab, return, esc, arrows).
+  Alternatively wire
+  your own launcher (Raycast/Hammerspoon/skhd) to the CLI modes below.
+- Clipboard images persist after omasnap exits (PNG + TIFF flavors are written eagerly).
+
+Wayland runtime commands used by the application:
 
 - `hyprctl`
 - `wl-copy` and `wl-paste`
@@ -141,6 +167,29 @@ Ensure `~/.local/bin` is on `PATH`, then verify the installed CLI:
 omasnap --version
 omasnap --help
 ```
+
+### Manual macOS build
+
+Dependencies (Homebrew):
+
+```bash
+brew install cmake ninja qt
+```
+
+Build and run from `build/omasnap.app`. Signing with a stable self-signed identity
+(created once via Keychain Access > Certificate Assistant) prevents Screen Recording
+re-prompts on every rebuild:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
+  -DOMASNAP_SIGN_IDENTITY="omasnap-dev"
+cmake --build build --parallel
+open build/omasnap.app
+```
+
+Headless verification is identical to Linux (`QT_QPA_PLATFORM=offscreen`; see
+"Development and verification").
 
 ## CLI capture modes
 
@@ -342,6 +391,8 @@ measurement readout on a scaled monitor.
 `.github/workflows/build-linux.yml` runs the same `make check` build, interaction smoke,
 and available static-analysis checks in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
 artifact. A `v*` tag also attaches that artifact to the corresponding GitHub release.
+The workflow also runs the headless smoke suite on a macOS runner (`macos-latest`,
+Homebrew Qt) so both platforms stay green on every push.
 
 ## Acknowledgements
 

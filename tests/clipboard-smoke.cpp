@@ -11,7 +11,8 @@
 
 namespace {
 /** Writes an executable fake command. */
-bool writeExecutable(const QString &path, const QByteArray &contents) {
+[[maybe_unused]] bool writeExecutable(const QString &path,
+                                      const QByteArray &contents) {
   QFile file(path);
   if (!file.open(QIODevice::WriteOnly) ||
       file.write(contents) != contents.size())
@@ -23,7 +24,7 @@ bool writeExecutable(const QString &path, const QByteArray &contents) {
 }
 
 /** Checks that an offered PNG is decoded. */
-bool runImageCheck(QString &error) {
+[[maybe_unused]] bool runImageCheck(QString &error) {
   QImage image;
   if (!loadClipboardImage(image, error))
     return false;
@@ -37,7 +38,7 @@ bool runImageCheck(QString &error) {
 }
 
 /** Checks that a text-only clipboard reports a clear failure. */
-bool runTextOnlyCheck(QString &error) {
+[[maybe_unused]] bool runTextOnlyCheck(QString &error) {
   qputenv("OMASNAP_TEST_CLIPBOARD_TEXT_ONLY", "1");
   QImage image(1, 1, QImage::Format_ARGB32);
   QString clipboardError;
@@ -51,7 +52,7 @@ bool runTextOnlyCheck(QString &error) {
 }
 
 /** Checks that a failed image transfer keeps the wl-paste error. */
-bool runReadFailureCheck(QString &error) {
+[[maybe_unused]] bool runReadFailureCheck(QString &error) {
   qunsetenv("OMASNAP_TEST_CLIPBOARD_TEXT_ONLY");
   qputenv("OMASNAP_TEST_CLIPBOARD_READ_FAILURE", "1");
   QImage image;
@@ -67,6 +68,12 @@ bool runReadFailureCheck(QString &error) {
 } // namespace
 
 bool runClipboardSmoke(QString &error) {
+#if defined(Q_OS_MACOS)
+  // The fake wl-copy/wl-paste fixtures only drive the Wayland clipboard
+  // backend; macOS reads and writes NSPasteboard instead.
+  static_cast<void>(error);
+  return true;
+#else
   QTemporaryDir directory;
   if (!directory.isValid()) {
     error = QStringLiteral("Could not create clipboard-test directory");
@@ -142,4 +149,5 @@ bool runClipboardSmoke(QString &error) {
 
   return runImageCheck(error) && runTextOnlyCheck(error) &&
          runReadFailureCheck(error);
+#endif // Q_OS_MACOS
 }

@@ -498,9 +498,18 @@ bool runPositionalImageTargetCheck(QString &error) {
                                               "https://example.com/image.png"))
                                         : QStringLiteral("setup failed");
   QDir::setCurrent(previousDirectory);
-  if (!image.save(path, "PNG") || resolveLocalImagePath(path) != path ||
-      resolveLocalImagePath(url) != path || !changedDirectory ||
-      resolvedColonPath != colonPath || !savedColonImage ||
+  // macOS exposes temp dirs under /var/… while getcwd reports the physical
+  // /private/var/… form, so resolved paths are compared by file identity
+  // rather than by string equality.
+  const auto sameFile = [](const QString &candidate, const QString &expected) {
+    const QFileInfo info(candidate);
+    return info.exists() &&
+           info.canonicalFilePath() == QFileInfo(expected).canonicalFilePath();
+  };
+  if (!image.save(path, "PNG") || !sameFile(resolveLocalImagePath(path), path) ||
+      !sameFile(resolveLocalImagePath(url), path) || !changedDirectory ||
+      resolvedColonPath.isEmpty() || !sameFile(resolvedColonPath, colonPath) ||
+      !savedColonImage ||
       !createdRemoteLookalike || !resolvedRemoteUrl.isEmpty() ||
       !resolveLocalImagePath(
            QDir(directory.path()).filePath(QStringLiteral("missing.png")))
@@ -1317,13 +1326,22 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
   const QImage overlayExport =
       renderCapture(capture, QRectF(0, 0, 80, 40), {redaction, arrow, label},
                     BackgroundStyle::None);
-  const QColor overlayFill = overlayExport.pixelColor(22, 12);
-  const QColor overlayStroke = overlayExport.pixelColor(26, 20);
+  const QColor overlayFill = overlayExport.pixelColor(36, 28);
+  const QColor overlayStroke = overlayExport.pixelColor(23, 20);
+  // Glyph ink positions differ between font backends (FreeType vs CoreText),
+  // so text visibility is asserted by presence rather than at a fixed pixel.
+  bool sawTextInk = false;
+  for (int y = 0; y < overlayExport.height() && !sawTextInk; ++y)
+    for (int x = 0; x < overlayExport.width() && !sawTextInk; ++x)
+      sawTextInk = overlayExport.pixelColor(x, y) == label.color;
   if (overlayExport.isNull() || redactionOnly.isNull() ||
       redactionOnly.pixelColor(22, 12) != solid || showsSecretRed(overlayFill) ||
-      overlayStroke.blue() <= overlayStroke.red() + 20) {
+      !sawTextInk || overlayStroke != arrow.color) {
     error = QStringLiteral(
-        "Export did not keep redaction under arrow and text");
+                "Export did not keep redaction under arrow and text "
+                "(redactionOnly=%1 overlayFill=%2 overlayStroke=%3)")
+                .arg(redactionOnly.pixelColor(22, 12).name(),
+                     overlayFill.name(), overlayStroke.name());
     return false;
   }
 

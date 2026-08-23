@@ -1,10 +1,10 @@
 #include "pin.hpp"
 #include "capture.hpp"
+#include "overlay-window.hpp"
 #include "pin-file.hpp"
 #include "pin-layout.hpp"
 #include "icons.hpp"
 
-#include <LayerShellQt/Window>
 #include <QApplication>
 #include <QBuffer>
 #include <QDrag>
@@ -321,14 +321,7 @@ private:
 
   void applyPosition(QPoint position) {
     position_ = position;
-    if (QWindow *handle = windowHandle()) {
-      if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle)) {
-        const QSize available = availableSize();
-        layer->setMargins(
-            QMargins(0, 0, available.width() - position.x() - width(),
-                     available.height() - position.y() - height()));
-      }
-    }
+    positionPinWindow(*this, position, availableSize());
   }
   // The wide drag handle stands alone in the top-left; edit, path, copy, and
   // close remain grouped in the top-right.
@@ -387,34 +380,14 @@ int runPinnedCapture(const QString &path) {
     qWarning("omasnap: could not lock pinned image %s", qUtf8Printable(path));
     return 1;
   }
-  static_cast<void>(window.winId());
-  QWindow *handle = window.windowHandle();
-  LayerShellQt::Window *layer =
-      handle ? LayerShellQt::Window::get(handle) : nullptr;
-  if (!handle || !layer) {
-    qCritical("omasnap: could not create pinned layer surface");
-    return 1;
-  }
 
-  layer->setScope(QStringLiteral("omasnap-pin"));
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layer->setAnchors(anchors);
   const QPoint slot = pinSlotPosition(window.availableSize(), window.size(),
                                       window.size(), window.slotIndex(),
                                       kPinGap, kCornerMargin);
-  layer->setMargins(QMargins(0, 0,
-                             window.availableSize().width() - slot.x() -
-                                 window.width(),
-                             window.availableSize().height() - slot.y() -
-                                 window.height()));
-  layer->setExclusiveZone(0);
-  layer->setDesiredSize(window.size());
-  layer->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityOnDemand);
-  layer->setActivateOnShow(false);
-  layer->setLayer(LayerShellQt::Window::LayerOverlay);
+  if (!configurePinWindow(window, slot, window.availableSize())) {
+    qCritical("omasnap: could not create pinned layer surface");
+    return 1;
+  }
   window.show();
   return QApplication::exec();
 }
