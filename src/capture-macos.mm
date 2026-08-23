@@ -13,20 +13,77 @@
 
 #include <unistd.h>
 
+#include <cstring>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <thread>
 
 namespace {
 
 constexpr int kMaxOnlineDisplays = 16;
 constexpr int64_t kCaptureTimeoutNs = 5LL * NSEC_PER_SEC;
 
+/** SCShareableContent costs ~30 ms to fetch and only depends on TCC, not on
+ *  the capture target, so the (instant) monitor probe kicks the fetch off and
+ *  the grab joins it instead of paying the round trip serially. */
+SCShareableContent *takePrefetchedShareableContent() {
+  static std::mutex mutex;
+  static std::condition_variable ready;
+  static SCShareableContent *prefetched = nil;
+  static bool fetchStarted = false;
+  static bool fetchComplete = false;
+
+  std::unique_lock<std::mutex> lock(mutex);
+  if (!fetchStarted) {
+    fetchStarted = true;
+    lock.unlock();
+    @autoreleasepool {
+      dispatch_semaphore_t done = dispatch_semaphore_create(0);
+      __block SCShareableContent *fetched = nil;
+      [SCShareableContent
+          getShareableContentExcludingDesktopWindows:NO
+                                 onScreenWindowsOnly:YES
+                                   completionHandler:^(
+                                       SCShareableContent *result,
+                                       NSError *error) {
+                                     fetched = [result retain];
+                                     static_cast<void>(error);
+                                     dispatch_semaphore_signal(done);
+                                   }];
+      dispatch_semaphore_wait(
+          done, dispatch_time(DISPATCH_TIME_NOW, kCaptureTimeoutNs));
+      lock.lock();
+      prefetched = fetched;
+      fetchComplete = true;
+      lock.unlock();
+      ready.notify_all();
+    }
+  } else {
+    ready.wait_for(lock, std::chrono::seconds(5),
+                   [&] { return fetchComplete; });
+  }
+  return prefetched; // Retained once for the process lifetime.
+}
+
+/** Starts the prefetch without blocking; called from the fast probe path. */
+void prefetchShareableContent() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    std::thread([] { (void)takePrefetchedShareableContent(); }).detach();
+  });
+}
+
 QRect toQRect(const CGRect &rect) {
   return QRect(qRound(rect.origin.x), qRound(rect.origin.y),
                qRound(rect.size.width), qRound(rect.size.height));
 }
 
-/** Renders a CGImage into an upright ARGB32_Premultiplied image. */
+/** Renders a CGImage into an upright ARGB32_Premultiplied image.
+ *  Fast path: ScreenCaptureKit delivers 8bpc little-endian BGRA premultiplied
+ *  rasters; those are byte-compatible with QImage::Format_ARGB32_Premultiplied
+ *  and copy without a compositing pass. */
 bool cgImageToQImage(CGImageRef cgImage, QImage &image) {
   const size_t width = CGImageGetWidth(cgImage);
   const size_t height = CGImageGetHeight(cgImage);
@@ -34,6 +91,38 @@ bool cgImageToQImage(CGImageRef cgImage, QImage &image) {
       width > size_t(std::numeric_limits<int>::max()) ||
       height > size_t(std::numeric_limits<int>::max()))
     return false;
+
+  const bool byteCompatible =
+      CGImageGetBitsPerComponent(cgImage) == 8 &&
+      CGImageGetBitsPerPixel(cgImage) == 32 &&
+      (CGImageGetBitmapInfo(cgImage) & kCGBitmapByteOrderMask) ==
+          kCGBitmapByteOrder32Little &&
+      CGImageGetAlphaInfo(cgImage) == kCGImageAlphaPremultipliedFirst;
+  if (byteCompatible) {
+    CFDataRef raster =
+        CGDataProviderCopyData(CGImageGetDataProvider(cgImage));
+    if (raster) {
+      const size_t stride = CGImageGetBytesPerRow(cgImage);
+      const uchar *bytes = CFDataGetBytePtr(raster);
+      const size_t needed = stride * (height - 1) + width * 4;
+      if (static_cast<size_t>(CFDataGetLength(raster)) >= needed) {
+        if (stride == width * 4) {
+          image = QImage(bytes, int(width), int(height), int(stride),
+                         QImage::Format_ARGB32_Premultiplied)
+                      .copy(); // Single memcpy; detaches from the CF buffer.
+        } else {
+          QImage direct(int(width), int(height),
+                        QImage::Format_ARGB32_Premultiplied);
+          for (size_t y = 0; y < height; ++y)
+            memcpy(direct.scanLine(int(y)), bytes + y * stride, width * 4);
+          image = direct;
+        }
+        CFRelease(raster);
+        return true;
+      }
+      CFRelease(raster);
+    }
+  }
 
   QImage result(int(width), int(height), QImage::Format_ARGB32_Premultiplied);
   // Qt's ARGB32_Premultiplied memory layout matches a little-endian BGRA
@@ -101,28 +190,8 @@ bool grabWithScreenCaptureKitOnQueue(CGDirectDisplayID displayId,
                                      const QSize &pixelSize, QImage &image,
                                      QString &error) {
   @autoreleasepool {
-    dispatch_semaphore_t done = dispatch_semaphore_create(0);
-
-    __block SCShareableContent *content = nil;
-    [SCShareableContent
-        getShareableContentExcludingDesktopWindows:NO
-                               onScreenWindowsOnly:YES
-                                 completionHandler:^(
-                                     SCShareableContent *result,
-                                     NSError *shareError) {
-                                   // The result only lives for SCK's internal
-                                   // autorelease pool; keep it across the
-                                   // handoff to this thread.
-                                   content = [result retain];
-                                   static_cast<void>(shareError);
-                                   dispatch_semaphore_signal(done);
-                                 }];
-    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW,
-                                                    kCaptureTimeoutNs)) != 0) {
-      error = QStringLiteral("Screen capture timed out");
-      [content release];
-      return false;
-    }
+    // Fetched concurrently with process startup by the monitor probe.
+    SCShareableContent *content = takePrefetchedShareableContent();
     if (!content) {
       error = QStringLiteral("Could not capture display");
       return false;
@@ -153,6 +222,7 @@ bool grabWithScreenCaptureKitOnQueue(CGDirectDisplayID displayId,
 
     __block CGImageRef captured = nullptr;
     __block NSError *captureError = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
     [SCScreenshotManager captureImageWithFilter:filter
                                   configuration:configuration
                               completionHandler:^(CGImageRef result,
@@ -168,13 +238,10 @@ bool grabWithScreenCaptureKitOnQueue(CGDirectDisplayID displayId,
       error = QStringLiteral("Screen capture timed out");
       [filter release];
       [configuration release];
-      [content release];
       return false;
     }
     [filter release];
     [configuration release];
-    [content release];
-    content = nil;
     if (!captured || captureError) {
       [captureError release];
       if (captured)
@@ -235,6 +302,10 @@ bool grabWithDisplayCreateImage(CGDirectDisplayID displayId, QImage &image,
 } // namespace
 
 bool probeFocusedMonitorImpl(MonitorInfo &monitor, QString &error) {
+  // The probe is the first capture step and costs microseconds; use it to
+  // hide the ~30 ms SCShareableContent fetch behind process startup.
+  prefetchShareableContent();
+
   // CGEventGetLocation reports global top-left point coordinates, the same
   // space Qt uses for screen geometry.
   CGEventRef event = CGEventCreate(nullptr);
@@ -293,17 +364,21 @@ bool grabMonitorPixelsImpl(const MonitorInfo &monitor, QImage &image,
   return grabWithDisplayCreateImage(*displayId, image, error);
 }
 
-void *beginWindowDiscoveryImpl() { return nullptr; }
+void *beginWindowDiscoveryImpl() {
+  // Snapshot the on-screen window list before the pixel grab so discovery
+  // overlaps the capture, mirroring the Wayland path's hyprctl overlap.
+  const CFArrayRef windowList = CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+  return const_cast<void *>(static_cast<const void *>(windowList));
+}
 
 QVector<WindowTarget> finishWindowDiscoveryImpl(void *handle,
                                                 const MonitorInfo &monitor) {
-  static_cast<void>(handle);
   QVector<WindowTarget> targets;
+  CFArrayRef windowList = static_cast<CFArrayRef>(handle);
+  if (!windowList)
+    return targets;
   @autoreleasepool {
-    CFArrayRef windowList = CGWindowListCopyWindowInfo(
-        kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
-    if (!windowList)
-      return targets;
 
     // kCGWindowBounds shares Qt's global top-left point space with
     // monitor.geometry; translate into monitor-relative coordinates and drop
@@ -346,6 +421,79 @@ QVector<WindowTarget> finishWindowDiscoveryImpl(void *handle,
   return targets;
 }
 
-void cancelWindowDiscoveryImpl(void *handle) { static_cast<void>(handle); }
+void cancelWindowDiscoveryImpl(void *handle) {
+  if (handle)
+    CFRelease(static_cast<CFArrayRef>(handle));
+}
+
+QByteArray encodePngImpl(const QImage &image) {
+  if (image.isNull())
+    return {};
+  @autoreleasepool {
+    // Un-premultiply in Qt before handing pixels to CoreGraphics: PNG stores
+    // straight alpha, and Qt's and CG's premultiplied<->straight rounding
+    // differ by an LSB on semi-transparent pixels. One Qt-side conversion
+    // makes the round trip bit-identical for every pixel (verified
+    // pixel-exhaustively, including alpha gradients).
+    const QImage straight = image.format() == QImage::Format_ARGB32
+                                ? image
+                                : image.convertToFormat(QImage::Format_ARGB32);
+    CGImageRef cgImage = straight.toCGImage();
+    if (!cgImage)
+      return QByteArray();
+
+    // ~6x faster than libpng on multi-megapixel captures, still lossless.
+    CFMutableDataRef memory = CFDataCreateMutable(kCFAllocatorDefault, 0);
+    CGImageDestinationRef destination = CGImageDestinationCreateWithData(
+        memory, CFSTR("public.png"), 1, nullptr);
+    if (!destination) {
+      CFRelease(memory);
+      CFRelease(cgImage);
+      return {};
+    }
+    CGImageDestinationAddImage(destination, cgImage, nullptr);
+    const bool finalized = CGImageDestinationFinalize(destination);
+    CFRelease(destination);
+    CFRelease(cgImage);
+    if (!finalized) {
+      CFRelease(memory);
+      return {};
+    }
+    const QByteArray png(reinterpret_cast<const char *>(CFDataGetBytePtr(memory)),
+                         int(CFDataGetLength(memory)));
+    CFRelease(memory);
+    // ImageIO embeds an iCCP profile; Qt's libpng writer does not. A tagged
+    // decode makes QImage::operator== fail against untagged peers even with
+    // identical pixels, so strip color-metadata chunks for byte parity with
+    // the Linux output.
+    static const char *const kColorChunks[] = {"iCCP", "sRGB", "gAMA", "cHRM"};
+    QByteArray stripped;
+    stripped.reserve(png.size());
+    stripped.append(png.constData(), 8); // PNG signature
+    const uchar *cursor =
+        reinterpret_cast<const uchar *>(png.constData());
+    const uchar *const end = cursor + png.size();
+    cursor += 8;
+    while (cursor + 8 <= end) {
+        const quint32 length = (quint32(cursor[0]) << 24) |
+                               (quint32(cursor[1]) << 16) |
+                               (quint32(cursor[2]) << 8) | quint32(cursor[3]);
+        const char *const type = reinterpret_cast<const char *>(cursor + 4);
+        const size_t total = size_t(length) + 12;
+        if (cursor + total > end)
+            break;
+        bool colorChunk = false;
+        for (const char *known : kColorChunks)
+          colorChunk = colorChunk || memcmp(type, known, 4) == 0;
+        if (!colorChunk)
+            stripped.append(reinterpret_cast<const char *>(cursor),
+                            int(total));
+        cursor += total;
+        if (memcmp(type, "IEND", 4) == 0)
+            break;
+    }
+    return stripped == png ? png : stripped;
+  }
+}
 
 #endif // __APPLE__

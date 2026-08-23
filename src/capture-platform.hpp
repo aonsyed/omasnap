@@ -42,3 +42,6 @@ void cancelWindowDiscoveryImpl(void *handle);
 /** Best-effort fire-and-forget capture notification. */
 void sendCaptureNotificationImpl(const QString &message,
                                  const QString &imagePath);
+/** Encodes `image` as lossless PNG using the platform's fastest encoder.
+ *  Pixels must survive the round trip bit-identically. */
+[[nodiscard]] QByteArray encodePngImpl(const QImage &image);

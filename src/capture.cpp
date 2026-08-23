@@ -790,9 +790,8 @@ bool copyPngFileToClipboard(const QString &path, QString &error) {
 }
 
 bool copyImageToClipboard(const QImage &image, QString &error) {
-  QByteArray png;
-  QBuffer buffer(&png);
-  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG")) {
+  const QByteArray png = encodePngImpl(image);
+  if (png.isEmpty()) {
     error = QStringLiteral("Could not encode screenshot as PNG");
     return false;
   }

@@ -81,6 +81,9 @@ jobs:
 
       - name: Package macOS artifact
         run: |
+          # Embed Qt frameworks so the bundle runs without Homebrew installed.
+          "$(brew --prefix qt)/bin/macdeployqt" build/omasnap.app
+          codesign --force --sign - build/omasnap.app
           version="$(./build/omasnap.app/Contents/MacOS/omasnap --version | cut -d' ' -f2)"
           archive="omasnap-${version}-macos-arm64.tar.gz"
           echo "MAC_ARCHIVE=${archive}" >> "$GITHUB_ENV"

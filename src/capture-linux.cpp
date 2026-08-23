@@ -17,6 +17,7 @@
 #include <QProcess>
 #include <QStringList>
 #include <QUrl>
+#include <QBuffer>
 
 #include <algorithm>
 
@@ -308,6 +309,14 @@ QString recognizeTextImpl(const QImage &image, QString &error) {
   if (text.isEmpty())
     error = QStringLiteral("No text found in selection");
   return text;
+}
+
+QByteArray encodePngImpl(const QImage &image) {
+  QByteArray png;
+  QBuffer buffer(&png);
+  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG"))
+    return {};
+  return png;
 }
 
 void sendCaptureNotificationImpl(const QString &message,
