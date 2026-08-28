@@ -1,0 +1,55 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  MIN_LINE_COVERAGE: 35
+
+jobs:
+  coverage:
+    name: GCC line coverage gate
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel-20260828.0.581697
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Install build dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          cmake ninja pkgconf gcovr qt6-base layer-shell-qt
+          wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build with coverage instrumentation
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DOMASNAP_ENABLE_COVERAGE=ON
+          cmake --build build --parallel
+
+      - name: Run smoke suite under coverage
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Enforce minimum line coverage
+        run: |
+          gcovr --root . --filter '\.*/src/' --txt coverage.txt \
+            --xml cobertura.xml --fail-under-line "$MIN_LINE_COVERAGE"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_number }}
+          path: |
+            coverage.txt
+            cobertura.xml
+          if-no-files-found: ignore

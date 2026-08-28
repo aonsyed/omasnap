@@ -45,14 +45,36 @@ markers, text, OCR). Finished captures go to clipboard,
 | `src/pin.cpp/.hpp` | Pinned-capture surfaces (bottom-right, all workspaces/Spaces) |
 | `src/overlay-window.hpp` + `overlay-window-wayland.cpp` / `overlay-window-macos.mm` | Overlay/pin window seam: layer-shell vs NSPanel |
 | `src/serve.cpp/.hpp`, `src/hotkeys-macos.mm` | Resident global-hotkey server (macOS) |
+| `src/feature-flags.cpp/.hpp` | Runtime flags from `OMASNAP_FEATURE_FLAGS` (default on) |
+| `src/telemetry.cpp/.hpp` | Trace id, log scrubbing, metrics, opt-in local analytics, breadcrumbs |
+| `src/crash-reporter.cpp/.hpp` | Signal handler writing `crash-<pid>.log` (trace, breadcrumbs, backtrace) |
 | `cmake/MacPackaging.cmake`, `macos/Info.plist.in` | App bundle, plist, codesign |
 | `src/icons.cpp/.hpp` | Vector icon renderer for toolbar and pin controls |
 | `src/cli-path.cpp/.hpp` | Command-line image target resolution |
 | `src/eyedropper.cpp/.hpp` | Display-to-source color sampling |
 | `src/pin-file.cpp/.hpp`, `src/pin-layout.cpp/.hpp` | Pin file lifecycle and layout helpers |
-| `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including offscreen region-click, async-capture, and single-instance handover checks |
+| `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including offscreen region-click, async-capture, and single-instance handover checks; each standalone suite is also a CTest entry (`ctest --test-dir build`) |
+| `scripts/` | CI/pre-commit guards (`make guards`), dev-cert setup, flame-graph profiling |
+| `docs/runbooks.md`, `docs/dependency-policy.md` | Operational runbooks; dependency pinning/update policy |
+| `.factory/skills/` | Agent skills: release, verify-macos, ci-triage |
 | `install-omarchy` | Omarchy installer (deps via `omarchy-pkg-add`, installs to `~/.local`) |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(omasnap VERSION ...)`) |
+
+## Conventions
+
+- Files are `kebab-case.cpp/.hpp` (platform files keep the `-linux` /
+  `-macos` suffix); one class or concern per file pair.
+- Functions and variables are `camelCase`; types are `PascalCase`; enum
+  constants are `PascalCase`; file-scope constants are `kCamelCase`
+  (`kOcrSweepMs`); members carry a trailing underscore (`ocrClock_`).
+- Every declaration in the shared headers keeps a `[[nodiscard]]` when its
+  result must not be ignored; `constexpr` and `default` comparisons are
+  preferred over hand-written code.
+- Platform behavior lives only behind the seam headers
+  (`capture-platform.hpp`, `overlay-window.hpp`); shared code never branches
+  on platform macros outside those files.
+- Formatting: `.clang-format` (LLVM base, 80 columns, 2-space indent);
+  CI checks only files changed in a PR, so never bulk-reformat legacy code.
 
 ## Build and verify
 
@@ -75,14 +97,23 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 `make check` configures and builds the project, runs the complete headless
 offscreen Qt smoke suite (including simulated region clicks and asynchronous
 capture), runs `clang-tidy`, and runs `clazy-standalone`/`qmllint` when those
-tools are available. The same headless suite passes on both platforms;
+tools are available. `make guards` (part of `check`) enforces the repository
+guards: issue-referenced TODOs, the 5 MB file budget, used dependencies,
+wired feature flags, and AGENTS.md path consistency. Install the same guards
+plus `clang-format` as git hooks with `pre-commit install`. The same headless
+suite passes on both platforms;
 platform-specific tests (Wayland cleanup, fake `wl-paste` clipboard fixtures)
 are compiled/guarded out on macOS, and macOS-specific suites run everywhere.
 
 Always run the full suite after behavioral changes. CI
-(`.github/workflows/build-linux.yml`) builds and smokes Arch Linux plus a
-`macos-latest` runner on every push and PR, attaching versioned artifacts for
-both platforms on tags.
+(`.github/workflows/build-linux.yml`) builds and smokes Arch Linux (pinned
+container, ccache) plus a `macos-latest` runner on every push and PR,
+attaching versioned artifacts for both platforms on tags; `quality.yml`
+(guards, complexity, duplication, Doxygen), `coverage.yml` (line-coverage
+gate), `codeql.yml` (SAST), `pr-review.yml` (clang-tidy/format review
+comments), and `alert.yml` (auto-filed issue on a red main) cover the rest.
+Dependency pinning policy (pinned CI image, 7-day minimum release age) lives
+in `docs/dependency-policy.md`; troubleshooting in `docs/runbooks.md`.
 
 Dependencies (Arch): `base-devel cmake ninja pkgconf qt6-base layer-shell-qt
 wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng`.

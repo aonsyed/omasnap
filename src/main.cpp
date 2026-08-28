@@ -1,9 +1,11 @@
 #include "capture.hpp"
 #include "cli-path.hpp"
+#include "crash-reporter.hpp"
 #include "editor.hpp"
 #include "instance-lock.hpp"
 #include "overlay-window.hpp"
 #include "pin.hpp"
+#include "telemetry.hpp"
 #ifdef __APPLE__
 #include "serve.hpp"
 #endif
@@ -13,6 +15,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
 #include <QLockFile>
@@ -118,6 +121,16 @@ int main(int argc, char **argv) {
   QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
   overlayPlatformPreinit();
   QApplication application(argc, argv);
+
+  // One trace id per capture session, inherited by pins and hotkey-spawned
+  // captures so a session can be followed across processes; the handler also
+  // scrubs credential-shaped values out of every log line.
+  omasnap::adoptTraceIdFromEnvironment();
+  omasnap::installTelemetryMessageHandler();
+  omasnap::installCrashReporter(secureRuntimeDirectory());
+  qInfo().noquote() << QStringLiteral("omasnap %1 trace=%2")
+                          .arg(QString::fromLatin1(OMASNAP_VERSION),
+                               omasnap::traceId());
 
   // A stitched scroll capture (or any tall pinned image) exceeds Qt's default
   // 256 MB image-decode allocation limit; lift it so --file/--pin can open it.
@@ -363,6 +376,8 @@ int main(int argc, char **argv) {
   const bool instantFullscreenOutput =
       !editingImage && captureMode == CaptureEditor::CaptureMode::Fullscreen &&
       quickOutputMode != QuickOutputMode::None;
+  QElapsedTimer captureTimer;
+  captureTimer.start();
   if (!editingImage &&
       !captureMonitorPixels(capture.monitor, capture,
                             !instantFullscreenOutput, error)) {
@@ -371,6 +386,17 @@ int main(int argc, char **argv) {
     showVisibleError(QStringLiteral("Screenshot failed: %1").arg(error));
     return 1;
   }
+  omasnap::recordMetricSample(QStringLiteral("capture_ms"),
+                              captureTimer.elapsed());
+  omasnap::recordAnalyticsEvent(
+      QStringLiteral("session"),
+      captureMode == CaptureEditor::CaptureMode::Fullscreen
+          ? QStringLiteral("fullscreen")
+          : captureMode == CaptureEditor::CaptureMode::Window
+                ? QStringLiteral("window")
+                : captureMode == CaptureEditor::CaptureMode::File
+                      ? QStringLiteral("file")
+                      : QStringLiteral("region"));
 
   if (instantFullscreenOutput) {
     QString outputError;

@@ -13,13 +13,18 @@ jobs:
   archlinux:
     name: Arch Linux x86_64
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    # Pinned by date for reproducible builds; bump deliberately
+    # (docs/dependency-policy.md).
+    container:
+      image: archlinux:base-devel-20260828.0.581697
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Install build and runtime dependencies
         run: >-
           pacman -Syu --noconfirm --needed
-          base-devel cmake ninja pkgconf qt6-base layer-shell-qt
+          cmake ninja pkgconf ccache qt6-base layer-shell-qt
           wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng
           clang
 
@@ -29,10 +34,32 @@ jobs:
       - name: Check installer scripts
         run: bash -n install-omarchy
 
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-arch-${{ github.sha }}
+          restore-keys: ccache-arch-
+
       - name: Build, run interaction smoke, and analyze sources
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: make check
+        run: >-
+          CMAKE="cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" make check
+
+      - name: Run split suites in randomized parallel order
+        run: >-
+          ctest --test-dir build --parallel 2 --schedule-random
+          --output-on-failure --output-log build/ctest-split.log
+
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-timing-${{ github.run_number }}
+          path: |
+            build/ctest-split.log
+            build/Testing/*/Test.xml
+          if-no-files-found: ignore
 
       - name: Stage installation
         run: cmake --install build --prefix "$PWD/stage/usr"
@@ -57,6 +84,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.CAPTURE_ARCHIVE }}
+          generate_release_notes: true
 
   macos:
     name: macOS arm64
@@ -64,17 +92,26 @@ jobs:
 
     steps:
       - name: Install build dependencies
-        run: brew install cmake ninja qt
+        run: brew install cmake ninja qt ccache
 
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: ccache-macos-
 
       - name: Build and run headless smoke suite
         env:
           QT_QPA_PLATFORM: offscreen
           CMAKE_PREFIX_PATH: /opt/homebrew/opt/qt
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel
           ./build/omasnap.app/Contents/MacOS/omasnap --version
           ctest --test-dir build --output-on-failure
@@ -102,3 +139,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.MAC_ARCHIVE }}
+          generate_release_notes: true

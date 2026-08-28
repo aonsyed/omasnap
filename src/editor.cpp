@@ -1,8 +1,9 @@
 /** @fileoverview Handles screenshot selection, annotation, and editor drawing.
  */
 #include "editor.hpp"
-#include "icons.hpp"
 #include "eyedropper.hpp"
+#include "feature-flags.hpp"
+#include "icons.hpp"
 #include "palette-config.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -340,8 +341,12 @@ QPointF constrainedRedactionEndpoint(const QPointF &candidate,
       constrainedRedactionCoordinate(candidate.y(), fixed.y(), original.y())};
 }
 
-/// One top-to-bottom pass of the OCR scan band.
-constexpr qint64 kOcrSweepMs = 1200;
+/// One top-to-bottom pass of the OCR scan band. The `ocr_scan_sweep` feature
+/// flag collapses the sweep to zero so results appear the moment OCR lands.
+qint64 ocrSweepDurationMs() {
+  return omasnap::featureEnabled(omasnap::FeatureFlag::OcrScanSweep) ? 1200
+                                                                     : 0;
+}
 
 void drawStatusPill(QPainter &painter, const QRect &bounds,
                     const QString &text) {
@@ -649,10 +654,15 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     // Let the scan band finish the sweep it is on (and always at least one
     // full pass) before the card appears: a result that pops up mid-sweep
     // reads as a glitch, however fast tesseract was.
+    const qint64 sweepMs = ocrSweepDurationMs();
     const qint64 elapsed = ocrClock_.elapsed();
-    const qint64 sweeps =
-        std::max<qint64>(1, (elapsed + kOcrSweepMs - 1) / kOcrSweepMs);
-    const int wait = static_cast<int>(sweeps * kOcrSweepMs - elapsed);
+    const int wait =
+        sweepMs <= 0
+            ? 0
+            : static_cast<int>(
+                  std::max<qint64>(1, (elapsed + sweepMs - 1) / sweepMs) *
+                      sweepMs -
+                  elapsed);
     QTimer::singleShot(wait, this, [this, shown] {
       if (ocrRegion_.isEmpty() || ocrWatcher_.isRunning())
         return; // dismissed, or a newer OCR took over the region
@@ -2619,9 +2629,14 @@ void CaptureEditor::paintOcrOverlay(QPainter &painter, const QRectF &image,
   if (ocrResultText_.isEmpty()) {
     // Scanning: a tinted box with a bright band sweeping top to bottom, the
     // way a flatbed reads a page. Purely decorative; tesseract sets the pace.
-    const qreal t = std::fmod(static_cast<qreal>(ocrClock_.elapsed()),
-                              qreal(kOcrSweepMs)) /
-                    qreal(kOcrSweepMs);
+    // With the sweep flag disabled the box stays static: no NaN progress.
+    const qint64 sweepMs = ocrSweepDurationMs();
+    const qreal t =
+        sweepMs <= 0
+            ? 0.0
+            : std::fmod(static_cast<qreal>(ocrClock_.elapsed()),
+                        qreal(sweepMs)) /
+                  qreal(sweepMs);
     const qreal bandHeight = std::clamp(region.height() * 0.35, 18.0, 64.0);
     const qreal y = region.top() - bandHeight + t * (region.height() + bandHeight);
     painter.setClipRect(region);
@@ -2630,8 +2645,9 @@ void CaptureEditor::paintOcrOverlay(QPainter &painter, const QRectF &image,
     gradient.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), 0));
     gradient.setColorAt(0.8, QColor(accent.red(), accent.green(), accent.blue(), 130));
     gradient.setColorAt(1.0, QColor(255, 255, 255, 230));
-    painter.fillRect(QRectF(region.left(), y, region.width(), bandHeight),
-                     gradient);
+    if (sweepMs > 0)
+      painter.fillRect(QRectF(region.left(), y, region.width(), bandHeight),
+                       gradient);
     painter.setClipping(false);
     painter.setPen(QPen(accent, 1.5));
     painter.setBrush(Qt::NoBrush);

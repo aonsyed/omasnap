@@ -290,6 +290,33 @@ Install the corresponding Tesseract language data before adding a language to
 `OMARCHY_OCR_LANGS` (which commonly includes the user's script, e.g.
 `tha+eng`), then to `eng`.
 
+Runtime feature flags all default to enabled; disable them per invocation
+with `OMASNAP_FEATURE_FLAGS` (comma-separated `name=0` or `!name`):
+
+| Flag | Default | Disabled behavior |
+|---|---|---|
+| `ocr_scan_sweep` | on | OCR results appear immediately, without the scan-band animation |
+| `desktop_notifications` | on | No capture notifications are sent |
+
+```bash
+OMASNAP_FEATURE_FLAGS="ocr_scan_sweep=0" omasnap
+```
+
+Observability variables (all optional, none are secrets; see
+`.env.example` for the full list):
+
+```bash
+OMASNAP_TRACE_ID="abc123"      # inherited by pins and hotkey captures
+OMASNAP_ANALYTICS=1            # opt-in local usage events (analytics.jsonl)
+OMASNAP_METRICS_FILE=/tmp/m.json  # capture_ms / quick_output_ms samples
+```
+
+Every invocation logs `omasnap <version> trace=<id>` at startup, scrubs
+credential-shaped values out of its log output, and writes a
+`crash-<pid>.log` (signal, breadcrumbs, backtrace) beside the working
+snapshots if it dies. Troubleshooting recipes live in
+[docs/runbooks.md](docs/runbooks.md).
+
 ## Controls
 
 ### Capture selection
@@ -388,11 +415,35 @@ replay, vector movement and scaling, text editing, OCR, native-DPI output,
 endpoint-only line selection, external crop handles, and the native-pixel
 measurement readout on a scaled monitor.
 
-`.github/workflows/build-linux.yml` runs the same `make check` build, interaction smoke,
-and available static-analysis checks in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
-artifact. A `v*` tag also attaches that artifact to the corresponding GitHub release.
-The workflow also runs the headless smoke suite on a macOS runner (`macos-latest`,
-Homebrew Qt) so both platforms stay green on every push.
+Each standalone suite is also registered as its own CTest entry
+(`ctest --test-dir build`), so the suite can run randomized and in parallel:
+
+```bash
+ctest --test-dir build --parallel 2 --schedule-random --output-on-failure
+```
+
+Repository guards run before every push (`pre-commit install` once) and in CI:
+
+```bash
+make guards     # TODO scan, 5 MB file budget, unused deps, feature flags, AGENTS.md paths
+make format     # clang-format (see .clang-format)
+make docs       # Doxygen HTML reference into build/docs/html
+scripts/flamegraph.sh   # perf flame graph of the smoke suite (Linux)
+```
+
+`.github/workflows/` covers more than the build: `build-linux.yml` runs the
+same `make check` build, interaction smoke, and available static-analysis
+checks in a pinned Arch Linux container (ccache-cached), stages the CMake
+installation, uploads a versioned Linux artifact, and runs the headless smoke
+suite on a macOS runner (`macos-latest`, Homebrew Qt) so both platforms stay
+green on every push. `quality.yml` adds complexity/duplication reports and
+Doxygen docs; `coverage.yml` enforces a line-coverage gate;
+`codeql.yml` runs C/C++ SAST; `pr-review.yml` posts a clang-tidy + format
+review comment on pull requests; `alert.yml` files a `ci`-labeled issue when
+main goes red. A `v*` tag attaches both artifacts to the corresponding GitHub
+release (with generated release notes). Dependency pinning and update policy:
+[docs/dependency-policy.md](docs/dependency-policy.md). Operational runbooks:
+[docs/runbooks.md](docs/runbooks.md).
 
 ## Acknowledgements
 

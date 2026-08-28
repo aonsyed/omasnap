@@ -1,0 +1,13 @@
+---
+# Matches the existing hand-formatted style: LLVM base, 80 columns,
+# two-space indents, left-aligned pointers. `make format` applies it;
+# CI checks only files changed in a PR so legacy churn stays out of diffs.
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 80
+IndentWidth: 2
+PointerAlignment: Left
+DerivePointerAlignment: false
+AccessModifierOffset: -2
+AllowShortFunctionsOnASingleLine: Inline
+KeepEmptyLinesAtTheStartOfBlocks: false

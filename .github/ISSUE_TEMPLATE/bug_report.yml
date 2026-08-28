@@ -1,0 +1,45 @@
+name: Bug report
+description: Something captured, rendered, or exported incorrectly
+labels: [bug]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Wayland / Hyprland (Omarchy)
+        - macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - capture (region/window/fullscreen)
+        - editor (tools, layers, undo)
+        - output (clipboard/save/pin)
+        - OCR
+        - CLI / hotkeys
+        - build / packaging
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and crash reports
+      description: >
+        Terminal output (it starts with `omasnap <version> trace=<id>`) and,
+        for crashes, `crash-<pid>.log` from the runtime directory. See
+        docs/runbooks.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version (`omasnap --version`)

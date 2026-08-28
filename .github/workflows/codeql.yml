@@ -1,0 +1,47 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  security-events: write
+  contents: read
+
+jobs:
+  analyze:
+    name: SAST (C/C++)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel-20260828.0.581697
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Install build dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          cmake ninja pkgconf git qt6-base layer-shell-qt
+          wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          queries: security-extended
+
+      - name: Build for analysis
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:cpp"

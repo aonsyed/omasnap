@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Runbooks
+    url: https://github.com/aonsyed/omasnap/blob/main/docs/runbooks.md
+    about: Troubleshooting, release verification, and CI triage live here.

@@ -1,0 +1,95 @@
+name: Quality
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Guards, complexity, duplication, docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-format doxygen python3-pip
+          pipx install lizard
+
+      - name: Repository guards (todos, file budget, deps, flags, AGENTS.md)
+        run: make guards
+
+      - name: Enforce formatting on added files
+        run: |
+          base="${{ github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}"
+          # Newly added C++ files must be clang-format clean; modified
+          # legacy files are reported (below) but not reformatted wholesale.
+          mapfile -t added < <(git diff --name-only --diff-filter=A \
+            "$base" -- 'src/*.cpp' 'src/*.hpp' 'src/*.mm' \
+            'tests/*.cpp' 'tests/*.hpp' | grep -v '^$' || true)
+          if (( ${#added[@]} > 0 )); then
+            clang-format --dry-run --Werror "${added[@]}"
+          else
+            echo "format: no newly added C++ files"
+          fi
+
+      - name: Formatting advisory for modified files
+        run: |
+          base="${{ github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}"
+          mapfile -t modified < <(git diff --name-only --diff-filter=M \
+            "$base" -- 'src/*.cpp' 'src/*.hpp' 'src/*.mm' \
+            'tests/*.cpp' 'tests/*.hpp' | grep -v '^$' || true)
+          if (( ${#modified[@]} == 0 )); then
+            echo "format advisory: no modified C++ files"
+            exit 0
+          fi
+          clang-format --dry-run "${modified[@]}" 2>&1 | grep 'error:' | head -10 \
+            || echo "format advisory: modified files are clean"
+
+      - name: Cyclomatic complexity report
+        run: |
+          lizard src -l cpp -x '*/build/*' \
+            -T nloc=4000,ccn=120,arguments=12,token_count=8000 \
+            > complexity.txt
+          cat complexity.txt | tail -20
+
+      - name: Duplicate code report
+        run: |
+          npx --yes jscpd src --min-tokens 200 --reporters consoleFull \
+            --output ./jscpd-report --ignore "**/*.mm" || true
+          npx --yes jscpd src --min-tokens 200 --silent \
+            --output ./jscpd-report --ignore "**/*.mm" \
+            --reporter jsonFull
+          python3 - <<'EOF'
+          import json, sys
+          data = json.load(open("jscpd-report/jscpd-report.json"))
+          duplicates = data.get("duplicates", {})
+          if duplicates.get("total", 0) > 5:
+              print(f"duplicate blocks over budget: {duplicates['total']} (budget 5)")
+              sys.exit(1)
+          print(f"duplicate blocks within budget: {duplicates.get('total', 0)}/5")
+          EOF
+
+      - name: Generate API documentation
+        run: make docs
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports-${{ github.run_number }}
+          path: |
+            complexity.txt
+            jscpd-report/
+            build/docs/html/
+          if-no-files-found: ignore

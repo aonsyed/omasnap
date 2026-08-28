@@ -1,0 +1,103 @@
+name: PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Static review comment (clang-tidy + format)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel-20260828.0.581697
+
+    steps:
+      - name: Install build dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          cmake ninja pkgconf git clang clang-format
+          qt6-base layer-shell-qt wayland wayland-protocols
+          wl-clipboard tesseract tesseract-data-eng
+
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build with compile commands
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build build --parallel
+
+      - name: Collect findings for changed files
+        id: findings
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          mapfile -t changed < <(git diff --name-only --diff-filter=ACM \
+            "$BASE" -- 'src/*.cpp' 'src/*.hpp' 'src/*.mm' \
+            'tests/*.cpp' 'tests/*.hpp' | grep -v '^$' || true)
+          {
+            echo "## Omasnap static review"
+            echo ""
+            if (( ${#changed[@]} == 0 )); then
+              echo "No changed C++ files to review."
+              exit 0
+            fi
+            echo "### Formatting"
+            if ! clang-format --dry-run --Werror "${changed[@]}" 2> format.log; then
+              echo "**clang-format** would reformat files:"
+              grep 'error:' format.log | sed 's/^/- `/;s/:[0-9]*:[0-9]*: error:/` — /' \
+                | sort -u || true
+            else
+              echo "clean"
+            fi
+            echo ""
+            echo "### clang-tidy (\`clang-analyzer-*,bugprone-*,performance-*,misc-*\`)"
+            for source in "${changed[@]}"; do
+              [[ -f "$source" ]] || continue
+              clang-tidy -p build -quiet \
+                -checks='-*,clang-analyzer-*,bugprone-*,performance-*,misc-*' \
+                "$source" 2>/dev/null \
+                | grep -E 'warning:|error:' \
+                | sed "s|^|$(basename "$source"): |" || true
+            done
+          } > comment.md
+          # Empty sections mean no findings; say so instead of posting noise.
+          if ! grep -qE '^- |warning:|error:|would reformat' comment.md; then
+            printf '## Omasnap static review\n\nNo findings. Clean formatting, no clang-tidy diagnostics on changed files.\n' > comment.md
+          fi
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('comment.md', 'utf8').slice(0, 60000);
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## Omasnap static review';
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

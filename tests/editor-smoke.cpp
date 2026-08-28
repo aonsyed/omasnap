@@ -5,10 +5,12 @@
 #include "clipboard-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
+#include "feature-flags-smoke.hpp"
 #include "instance-lock-smoke.hpp"
 #include "palette-config-smoke.hpp"
 #include "pin-layout-smoke.hpp"
 #include "pin-lifecycle-smoke.hpp"
+#include "telemetry-smoke.hpp"
 #include "transform-smoke.hpp"
 #include "eyedropper.hpp"
 
@@ -4719,6 +4721,31 @@ bool runLayerWeightSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Runs one standalone smoke suite by name; used by ctest's per-suite test
+ *  registrations so suites can run in parallel, randomized order. */
+bool runNamedSmokeSuite(const QString &suite, QString &error) {
+  if (suite == QStringLiteral("clipboard"))
+    return runClipboardSmoke(error);
+  if (suite == QStringLiteral("transform"))
+    return runTransformSmoke(error);
+  if (suite == QStringLiteral("cut"))
+    return runCutSmoke(error);
+  if (suite == QStringLiteral("palette"))
+    return runPaletteConfigSmoke(error);
+  if (suite == QStringLiteral("instance-lock"))
+    return runInstanceLockSmoke(error);
+  if (suite == QStringLiteral("pin-layout"))
+    return runPinLayoutSmoke(error);
+  if (suite == QStringLiteral("pin-lifecycle"))
+    return runPinLifecycleSmoke(error);
+  if (suite == QStringLiteral("feature-flags"))
+    return runFeatureFlagsSmoke(error);
+  if (suite == QStringLiteral("telemetry"))
+    return runTelemetrySmoke(error);
+  error = QStringLiteral("Unknown smoke suite: %1").arg(suite);
+  return false;
+}
+
 int main(int argc, char **argv) {
   // Re-executed by the instance-lock checks as the process holding the lock.
   const QString heldLockPath =
@@ -4727,6 +4754,16 @@ int main(int argc, char **argv) {
     return runInstanceLockHolder(heldLockPath);
 
   QApplication application(argc, argv);
+  // ctest registers each standalone suite as its own test (randomized order,
+  // parallel runs) by passing the suite name as the second argument.
+  if (argc > 2) {
+    QString namedError;
+    const bool namedOk =
+        runNamedSmokeSuite(QString::fromLatin1(argv[2]), namedError);
+    if (!namedOk)
+      qWarning().noquote() << namedError;
+    return namedOk ? 0 : EXIT_FAILURE;
+  }
   if (!loadCaptureFonts())
     return 17;
   QString snapshotError;
@@ -5947,6 +5984,18 @@ int main(int argc, char **argv) {
   if (!runInstanceLockSmoke(instanceError)) {
     qWarning().noquote() << instanceError;
     return 85;
+  }
+
+  QString featureFlagsError;
+  if (!runFeatureFlagsSmoke(featureFlagsError)) {
+    qWarning().noquote() << "feature flags smoke failed:" << featureFlagsError;
+    return EXIT_FAILURE;
+  }
+
+  QString telemetryError;
+  if (!runTelemetrySmoke(telemetryError)) {
+    qWarning().noquote() << "telemetry smoke failed:" << telemetryError;
+    return EXIT_FAILURE;
   }
   return 0;
 }

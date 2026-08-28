@@ -1,0 +1,54 @@
+# Local quality gates. Install once with:
+#   pre-commit install
+# CI runs the same scripts via `make guards`; this file keeps them in front
+# of every commit, before the push.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=5120]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+        exclude: ^assets/
+      - id: trailing-whitespace
+        exclude: ^assets/
+
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format (staged C++ files)
+        entry: clang-format -i
+        language: system
+        types_or: [c++, objective-c++]
+        files: ^(src|tests)/
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks protect --staged --verbose
+        language: system
+        pass_filenames: false
+      - id: omasnap-todo-scan
+        name: TODO/FIXME must reference an issue
+        entry: scripts/scan-todos.sh
+        language: system
+        pass_filenames: false
+      - id: omasnap-large-files
+        name: no tracked files over 5 MB
+        entry: scripts/check-large-files.sh
+        language: system
+        pass_filenames: false
+      - id: omasnap-unused-deps
+        name: linked libraries must be used
+        entry: scripts/check-unused-deps.sh
+        language: system
+        pass_filenames: false
+      - id: omasnap-feature-flags
+        name: feature flags must be wired and documented
+        entry: scripts/check-feature-flags.sh
+        language: system
+        pass_filenames: false
+      - id: omasnap-agents-md
+        name: AGENTS.md paths must exist
+        entry: scripts/validate-agents-md.sh
+        language: system
+        pass_filenames: false
