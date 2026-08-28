@@ -19,9 +19,11 @@ jobs:
       - name: Install build dependencies
         run: >-
           pacman -Syu --noconfirm --needed
-          cmake ninja pkgconf git clang clang-format
+          cmake ninja pkgconf git clang
           qt6-base layer-shell-qt wayland wayland-protocols
           wl-clipboard tesseract tesseract-data-eng
+        # clang-format is not a separate Arch package: the clang package
+        # ships /usr/bin/clang-format.
 
       - name: Check out source
         uses: actions/checkout@v4
