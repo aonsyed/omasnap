@@ -2763,6 +2763,14 @@ void CaptureEditor::finish(OutputMode mode) {
   } else {
     QFile::remove(exportPath);
   }
+  // The working document is finished: stop new persistence, drop any
+  // coalesced render, and drain the in-flight one before removing the
+  // files. Otherwise a late close/focus event or the completing write can
+  // resurrect the snapshot after finish() (the editor closes here, but the
+  // smoke suite asserts the working document stays deleted).
+  suppressSnapshots_ = true;
+  snapshotDirty_ = false;
+  waitForSnapshot();
   if (!snapshotPath_.isEmpty()) {
     QFile::remove(workingLogPath());
     QFile::remove(snapshotPath_);
