@@ -13,10 +13,10 @@ jobs:
   archlinux:
     name: Arch Linux x86_64
     runs-on: ubuntu-latest
-    # Pinned by date for reproducible builds; bump deliberately
+    # Pinned by digest for reproducible builds; bump deliberately
     # (docs/dependency-policy.md).
     container:
-      image: archlinux:base-devel-20260828.0.581697
+      image: archlinux@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d
     env:
       QT_QPA_PLATFORM: offscreen
 
@@ -24,7 +24,7 @@ jobs:
       - name: Install build and runtime dependencies
         run: >-
           pacman -Syu --noconfirm --needed
-          cmake ninja pkgconf ccache qt6-base layer-shell-qt
+          cmake ninja pkgconf git ccache qt6-base layer-shell-qt
           wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng
           clang
 
@@ -43,7 +43,7 @@ jobs:
 
       - name: Build, run interaction smoke, and analyze sources
         run: >-
-          CMAKE="cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" make check
 
       - name: Run split suites in randomized parallel order

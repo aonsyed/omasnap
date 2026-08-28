@@ -102,11 +102,18 @@ bool ensurePrivateDirectory(const QString &path) {
 }
 
 QString secureRuntimeDirectory() {
-  QString runtime =
-      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+  // Explicit override first: the smoke suite points every suite process at
+  // its own directory so parallel ctest runs never share pins or snapshots.
+  QString runtime = qEnvironmentVariable("OMASNAP_RUNTIME_DIR");
   if (runtime.isEmpty()) {
-    runtime = QDir(QDir::tempPath())
-                  .filePath(QStringLiteral("omasnap-%1").arg(::getuid()));
+    runtime =
+        QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (runtime.isEmpty()) {
+      runtime = QDir(QDir::tempPath())
+                    .filePath(QStringLiteral("omasnap-%1").arg(::getuid()));
+    } else {
+      runtime = QDir(runtime).filePath(QStringLiteral("omasnap"));
+    }
   } else {
     runtime = QDir(runtime).filePath(QStringLiteral("omasnap"));
   }

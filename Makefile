@@ -4,6 +4,7 @@ PREFIX ?= $(HOME)/.local
 GENERATOR ?= Ninja
 
 CMAKE ?= cmake
+CMAKE_ARGS ?=
 CLANG_TIDY ?= clang-tidy
 CLAZY ?= clazy-standalone
 QMLLINT ?= qmllint
@@ -24,7 +25,8 @@ configure:
 	$(CMAKE) -S . -B $(BUILD_DIR) -G $(GENERATOR) \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DCMAKE_INSTALL_PREFIX=$(PREFIX)
+		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+		$(CMAKE_ARGS)
 
 build: configure
 	$(CMAKE) --build $(BUILD_DIR) --parallel

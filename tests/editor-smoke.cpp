@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <csignal>
 #include <sys/resource.h>
@@ -4747,6 +4748,15 @@ bool runNamedSmokeSuite(const QString &suite, QString &error) {
 }
 
 int main(int argc, char **argv) {
+  // Every smoke process gets a private runtime directory so ctest can run
+  // the suites in parallel: pins, snapshots, and crash files of one suite
+  // never leak into another's assertions. Absolute on purpose: relative
+  // overrides would trip saveTemporarySnapshot's path containment check.
+  const std::unique_ptr<QTemporaryDir> smokeRuntimeDir(new QTemporaryDir(
+      QDir::tempPath() + QStringLiteral("/omasnap-smoke-runtime-XXXXXX")));
+  if (smokeRuntimeDir->isValid())
+    qputenv("OMASNAP_RUNTIME_DIR", smokeRuntimeDir->path().toLocal8Bit());
+
   // Re-executed by the instance-lock checks as the process holding the lock.
   const QString heldLockPath =
       qEnvironmentVariable(kInstanceLockHolderVariable);
