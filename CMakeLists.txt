@@ -1,11 +1,21 @@
 cmake_minimum_required(VERSION 3.24)
-project(omasnap VERSION 1.17.1 LANGUAGES C CXX)
+project(omasnap VERSION 1.17.2 LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CTest)
 set(CMAKE_AUTOMOC ON)
 
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
+
+option(OMASNAP_ENABLE_COVERAGE "Instrument the build for gcov coverage" OFF)
+if(OMASNAP_ENABLE_COVERAGE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+  else()
+    message(WARNING "OMASNAP_ENABLE_COVERAGE requires GCC; ignoring")
+  endif()
+endif()
 
 if(APPLE)
   enable_language(OBJCXX)
@@ -53,6 +63,10 @@ endif()
 add_library(omasnap-core STATIC
   src/cli-path.cpp
   src/cli-path.hpp
+  src/crash-reporter.cpp
+  src/crash-reporter.hpp
+  src/feature-flags.cpp
+  src/feature-flags.hpp
   src/icons.cpp
   src/icons.hpp
   src/instance-lock.cpp
@@ -73,6 +87,8 @@ add_library(omasnap-core STATIC
   src/editor.cpp
   src/editor.hpp
   src/overlay-window.hpp
+  src/telemetry.cpp
+  src/telemetry.hpp
   ${OMASNAP_PLATFORM_SOURCES}
 )
 qt_add_resources(omasnap-core "capture-fonts"
@@ -120,6 +136,8 @@ set(OMASNAP_SMOKE_SOURCES
   tests/editor-smoke.cpp
   tests/clipboard-smoke.cpp
   tests/clipboard-smoke.hpp
+  tests/feature-flags-smoke.cpp
+  tests/feature-flags-smoke.hpp
   tests/instance-lock-smoke.cpp
   tests/instance-lock-smoke.hpp
   tests/transform-smoke.cpp
@@ -132,6 +150,8 @@ set(OMASNAP_SMOKE_SOURCES
   tests/pin-lifecycle-smoke.hpp
   tests/pin-layout-smoke.cpp
   tests/pin-layout-smoke.hpp
+  tests/telemetry-smoke.cpp
+  tests/telemetry-smoke.hpp
 )
 if(NOT APPLE)
   list(APPEND OMASNAP_SMOKE_SOURCES
@@ -146,7 +166,21 @@ target_include_directories(omasnap-smoke PRIVATE
 target_compile_options(omasnap-smoke PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(omasnap-smoke PRIVATE omasnap-core Qt6::Test)
 add_test(NAME omasnap-smoke COMMAND omasnap-smoke "${CMAKE_CURRENT_BINARY_DIR}/omasnap-smoke-output")
-set_tests_properties(omasnap-smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The aggregate test drives the whole interaction flow; the standalone suites
+# are registered individually so ctest can run them in parallel and in
+# randomized order (--parallel, --schedule-random). The aggregate test is
+# RUN_SERIAL: it asserts on async persistence timing and must not compete
+# with sibling suites for CPU.
+set(OMASNAP_SMOKE_TEST_NAMES omasnap-smoke)
+set_tests_properties(omasnap-smoke PROPERTIES RUN_SERIAL TRUE)
+foreach(OMASNAP_SUITE IN ITEMS
+    clipboard transform cut palette instance-lock pin-layout pin-lifecycle
+    feature-flags telemetry)
+  list(APPEND OMASNAP_SMOKE_TEST_NAMES omasnap-smoke-${OMASNAP_SUITE})
+  add_test(NAME omasnap-smoke-${OMASNAP_SUITE}
+    COMMAND omasnap-smoke "${CMAKE_CURRENT_BINARY_DIR}/omasnap-smoke-output" ${OMASNAP_SUITE})
+endforeach()
+set_tests_properties(${OMASNAP_SMOKE_TEST_NAMES} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 install(TARGETS omasnap

@@ -5,10 +5,12 @@
 #include "clipboard-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
+#include "feature-flags-smoke.hpp"
 #include "instance-lock-smoke.hpp"
 #include "palette-config-smoke.hpp"
 #include "pin-layout-smoke.hpp"
 #include "pin-lifecycle-smoke.hpp"
+#include "telemetry-smoke.hpp"
 #include "transform-smoke.hpp"
 #include "eyedropper.hpp"
 
@@ -33,6 +35,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <csignal>
 #include <sys/resource.h>
@@ -4719,7 +4722,41 @@ bool runLayerWeightSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Runs one standalone smoke suite by name; used by ctest's per-suite test
+ *  registrations so suites can run in parallel, randomized order. */
+bool runNamedSmokeSuite(const QString &suite, QString &error) {
+  if (suite == QStringLiteral("clipboard"))
+    return runClipboardSmoke(error);
+  if (suite == QStringLiteral("transform"))
+    return runTransformSmoke(error);
+  if (suite == QStringLiteral("cut"))
+    return runCutSmoke(error);
+  if (suite == QStringLiteral("palette"))
+    return runPaletteConfigSmoke(error);
+  if (suite == QStringLiteral("instance-lock"))
+    return runInstanceLockSmoke(error);
+  if (suite == QStringLiteral("pin-layout"))
+    return runPinLayoutSmoke(error);
+  if (suite == QStringLiteral("pin-lifecycle"))
+    return runPinLifecycleSmoke(error);
+  if (suite == QStringLiteral("feature-flags"))
+    return runFeatureFlagsSmoke(error);
+  if (suite == QStringLiteral("telemetry"))
+    return runTelemetrySmoke(error);
+  error = QStringLiteral("Unknown smoke suite: %1").arg(suite);
+  return false;
+}
+
 int main(int argc, char **argv) {
+  // Every smoke process gets a private runtime directory so ctest can run
+  // the suites in parallel: pins, snapshots, and crash files of one suite
+  // never leak into another's assertions. Absolute on purpose: relative
+  // overrides would trip saveTemporarySnapshot's path containment check.
+  const std::unique_ptr<QTemporaryDir> smokeRuntimeDir(new QTemporaryDir(
+      QDir::tempPath() + QStringLiteral("/omasnap-smoke-runtime-XXXXXX")));
+  if (smokeRuntimeDir->isValid())
+    qputenv("OMASNAP_RUNTIME_DIR", smokeRuntimeDir->path().toLocal8Bit());
+
   // Re-executed by the instance-lock checks as the process holding the lock.
   const QString heldLockPath =
       qEnvironmentVariable(kInstanceLockHolderVariable);
@@ -4727,6 +4764,16 @@ int main(int argc, char **argv) {
     return runInstanceLockHolder(heldLockPath);
 
   QApplication application(argc, argv);
+  // ctest registers each standalone suite as its own test (randomized order,
+  // parallel runs) by passing the suite name as the second argument.
+  if (argc > 2) {
+    QString namedError;
+    const bool namedOk =
+        runNamedSmokeSuite(QString::fromLatin1(argv[2]), namedError);
+    if (!namedOk)
+      qWarning().noquote() << namedError;
+    return namedOk ? 0 : EXIT_FAILURE;
+  }
   if (!loadCaptureFonts())
     return 17;
   QString snapshotError;
@@ -5897,6 +5944,11 @@ int main(int argc, char **argv) {
       return 59;
     QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
     application.processEvents();
+    // The save moves the working snapshot; let any in-flight async
+    // persistence drain before asserting on files, or a late chained
+    // write can re-create the snapshot mid-assertion on slow machines.
+    finishEditor.waitForSnapshot();
+    application.processEvents();
     const QStringList savedFiles =
         QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
             .entryList({QStringLiteral("*.png")}, QDir::Files);
@@ -5947,6 +5999,18 @@ int main(int argc, char **argv) {
   if (!runInstanceLockSmoke(instanceError)) {
     qWarning().noquote() << instanceError;
     return 85;
+  }
+
+  QString featureFlagsError;
+  if (!runFeatureFlagsSmoke(featureFlagsError)) {
+    qWarning().noquote() << "feature flags smoke failed:" << featureFlagsError;
+    return EXIT_FAILURE;
+  }
+
+  QString telemetryError;
+  if (!runTelemetrySmoke(telemetryError)) {
+    qWarning().noquote() << "telemetry smoke failed:" << telemetryError;
+    return EXIT_FAILURE;
   }
   return 0;
 }

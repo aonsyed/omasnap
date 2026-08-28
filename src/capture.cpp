@@ -2,11 +2,14 @@
 #include "capture.hpp"
 
 #include "capture-platform.hpp"
+#include "feature-flags.hpp"
+#include "telemetry.hpp"
 
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -99,11 +102,18 @@ bool ensurePrivateDirectory(const QString &path) {
 }
 
 QString secureRuntimeDirectory() {
-  QString runtime =
-      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+  // Explicit override first: the smoke suite points every suite process at
+  // its own directory so parallel ctest runs never share pins or snapshots.
+  QString runtime = qEnvironmentVariable("OMASNAP_RUNTIME_DIR");
   if (runtime.isEmpty()) {
-    runtime = QDir(QDir::tempPath())
-                  .filePath(QStringLiteral("omasnap-%1").arg(::getuid()));
+    runtime =
+        QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (runtime.isEmpty()) {
+      runtime = QDir(QDir::tempPath())
+                    .filePath(QStringLiteral("omasnap-%1").arg(::getuid()));
+    } else {
+      runtime = QDir(runtime).filePath(QStringLiteral("omasnap"));
+    }
   } else {
     runtime = QDir(runtime).filePath(QStringLiteral("omasnap"));
   }
@@ -799,6 +809,8 @@ bool copyImageToClipboard(const QImage &image, QString &error) {
 }
 
 bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
+  QElapsedTimer outputTimer;
+  outputTimer.start();
   if (image.isNull() || mode == QuickOutputMode::None) {
     error = QStringLiteral("Could not prepare screenshot snapshot");
     return false;
@@ -806,6 +818,10 @@ bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
   if (mode == QuickOutputMode::Copy) {
     if (!copyImageToClipboard(image, error))
       return false;
+    omasnap::recordMetricSample(QStringLiteral("quick_output_ms"),
+                                outputTimer.elapsed());
+    omasnap::recordAnalyticsEvent(QStringLiteral("quick_output"),
+                                  QStringLiteral("copy"));
     sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
     return true;
   }
@@ -832,6 +848,12 @@ bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
     QFile::remove(path);
     sendCaptureNotification(QStringLiteral("Screenshot copied to clipboard"));
   }
+  omasnap::recordMetricSample(QStringLiteral("quick_output_ms"),
+                              outputTimer.elapsed());
+  omasnap::recordAnalyticsEvent(
+      QStringLiteral("quick_output"),
+      mode == QuickOutputMode::Both ? QStringLiteral("both")
+                                    : QStringLiteral("save"));
   return true;
 }
 
@@ -1344,6 +1366,8 @@ QString shellQuote(QString value) {
 }
 
 void sendCaptureNotification(const QString &message, const QString &imagePath) {
+  if (!omasnap::featureEnabled(omasnap::FeatureFlag::DesktopNotifications))
+    return;
   sendCaptureNotificationImpl(message, imagePath);
 }
 

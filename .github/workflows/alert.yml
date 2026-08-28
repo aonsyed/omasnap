@@ -1,0 +1,57 @@
+name: Alerts
+
+on:
+  workflow_run:
+    workflows: [Build Linux, Quality, Coverage, CodeQL]
+    types: [completed]
+    branches: [main, master]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  file-issue:
+    name: File an issue when main goes red
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+
+    steps:
+      - name: Create or update failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const title = `CI failure: ${run.name} (#${run.run_number})`;
+            const body = [
+              `The **${run.name}** workflow failed on \`${run.head_branch}\`.`,
+              '',
+              `- Run: ${run.html_url}`,
+              `- Commit: ${run.head_sha.slice(0, 10)}`,
+              `- Triage guide: \`docs/runbooks.md\` ("CI failure triage")`,
+              '',
+              'Close this issue with the PR that fixes the failure.',
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'ci',
+            });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: 'Failed again: ' + run.html_url,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['ci', 'P1'],
+              });
+            }

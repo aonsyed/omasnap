@@ -2,3 +2,9 @@ build/
 stage/
 *.tar.gz
 .DS_Store
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+node_modules/

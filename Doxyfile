@@ -1,0 +1,24 @@
+# Doxygen reference for the shared core (src/) and tests.
+# `make docs` renders to build/docs/html; CI uploads it as an artifact.
+PROJECT_NAME           = omasnap
+PROJECT_NUMBER         = @OMASNAP_VERSION@
+PROJECT_BRIEF          = "Native screenshot and annotation overlay for Wayland/Hyprland and macOS"
+INPUT                  = src tests
+RECURSIVE              = YES
+FILE_PATTERNS          = *.cpp *.hpp *.mm
+EXCLUDE_PATTERNS       = */build/*
+OUTPUT_DIRECTORY       = build/docs
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+QT_STYLE_KEYWORDS      = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = NO
+TAB_SIZE               = 2
