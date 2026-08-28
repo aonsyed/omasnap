@@ -5944,6 +5944,11 @@ int main(int argc, char **argv) {
       return 59;
     QTest::keyClick(&finishEditor, Qt::Key_S, Qt::ControlModifier);
     application.processEvents();
+    // The save moves the working snapshot; let any in-flight async
+    // persistence drain before asserting on files, or a late chained
+    // write can re-create the snapshot mid-assertion on slow machines.
+    finishEditor.waitForSnapshot();
+    application.processEvents();
     const QStringList savedFiles =
         QDir(QDir(outputRoot).filePath(QStringLiteral("saved")))
             .entryList({QStringLiteral("*.png")}, QDir::Files);
