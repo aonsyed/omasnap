@@ -31,6 +31,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      # Container checkouts trip git's ownership check; the guard scripts
+      # call git.
+      - name: Trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Check installer scripts
         run: bash -n install-omarchy
 

@@ -26,11 +26,16 @@ extern "C" void handleCrashSignal(int signalNumber) {
     if (const int fd =
             ::open(g_crashLogPath, O_CREAT | O_WRONLY | O_TRUNC, 0600);
         fd >= 0) {
+      // Raw epoch, not ctime(): formatting helpers with static buffers are
+      // not reentrant, and this runs in signal context (CodeQL flags it).
       const std::time_t now = std::time(nullptr);
       char header[640];
-      const int headerLength = std::snprintf(
-          header, sizeof(header), "omasnap crash\nsignal=%d\ntime=%strace=%s\n",
-          signalNumber, std::ctime(&now), traceId().toLatin1().constData());
+      const int headerLength =
+          std::snprintf(header, sizeof(header),
+                        "omasnap crash\nsignal=%d\ntime_epoch=%lld\n"
+                        "trace=%s\n",
+                        signalNumber, static_cast<long long>(now),
+                        traceId().toLatin1().constData());
       if (headerLength > 0)
         static_cast<void>(
             ::write(fd, header, static_cast<size_t>(headerLength)));

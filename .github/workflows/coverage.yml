@@ -41,7 +41,10 @@ jobs:
 
       - name: Enforce minimum line coverage
         run: |
-          gcovr --root . --filter '\.*/src/' --txt coverage.txt \
+          # gcovr matches filters against root-relative paths: ".*src/"
+          # keeps src/ only (verified locally; an anchored "/src/" matches
+          # nothing and the gate reads 0%).
+          gcovr --root . --filter '.*src/' --txt coverage.txt \
             --xml cobertura.xml --fail-under-line "$MIN_LINE_COVERAGE"
 
       - name: Upload coverage report
