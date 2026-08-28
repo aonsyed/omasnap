@@ -168,8 +168,11 @@ target_link_libraries(omasnap-smoke PRIVATE omasnap-core Qt6::Test)
 add_test(NAME omasnap-smoke COMMAND omasnap-smoke "${CMAKE_CURRENT_BINARY_DIR}/omasnap-smoke-output")
 # The aggregate test drives the whole interaction flow; the standalone suites
 # are registered individually so ctest can run them in parallel and in
-# randomized order (--parallel, --schedule-random).
+# randomized order (--parallel, --schedule-random). The aggregate test is
+# RUN_SERIAL: it asserts on async persistence timing and must not compete
+# with sibling suites for CPU.
 set(OMASNAP_SMOKE_TEST_NAMES omasnap-smoke)
+set_tests_properties(omasnap-smoke PROPERTIES RUN_SERIAL TRUE)
 foreach(OMASNAP_SUITE IN ITEMS
     clipboard transform cut palette instance-lock pin-layout pin-lifecycle
     feature-flags telemetry)
