@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  MIN_LINE_COVERAGE: 35
+  MIN_LINE_COVERAGE: 60
 
 jobs:
   coverage:
